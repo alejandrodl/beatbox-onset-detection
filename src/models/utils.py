@@ -9,8 +9,10 @@ import pyrubberband as pyrb
 def pitch_shift(data, sampling_rate, pitch_semitones):
     return pyrb.pitch_shift(data, sampling_rate, pitch_semitones)
 
+
 def time_stretch(data, stretch_factor):
     return pyrb.time_stretch(data, 44100, stretch_factor)
+
 
 def saliency_map(model, x, label=None):
     x = tf.Variable(x, dtype=float)
@@ -36,6 +38,13 @@ def loss_gradient(model, x, label=None, loss_function=None):
         loss = loss_function(label, pred)
         grads = tape.gradient(loss, x)
     return grads
+
+
+def set_seeds(seed):
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    tf.random.set_seed(seed)
+    np.random.seed(seed)
 
 
 class EarlyStopping_Phoneme(tf.keras.callbacks.Callback):
@@ -78,12 +87,6 @@ class EarlyStopping_Phoneme(tf.keras.callbacks.Callback):
         if self.stopped_epoch > 0:
             print("Epoch %05d: early stopping" % (self.stopped_epoch + 1))
 
-
-def set_seeds(seed):
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    random.seed(seed)
-    tf.random.set_seed(seed)
-    np.random.seed(seed)
 
 
 def load_classes_sound(list_test_participants_avp, list_test_participants_lvt):
