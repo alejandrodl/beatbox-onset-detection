@@ -13,6 +13,9 @@ from mir_eval.onset import f_measure
 from sklearn.model_selection import KFold
 from sklearn.model_selection import StratifiedKFold
 
+from networks import *
+from utils import set_seeds
+
 
 
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
@@ -34,7 +37,7 @@ def flatten_sequence(sequence, factor):
     length = seq_length//factor
     seq_length_diff = seq_length - length
 
-    sequence_flat = np.zeros(sequence.size*factor)
+    sequence_flat = np.zeros(tf.size(Dataset_Test).numpy()*factor)
     for n in range(len(sequence)):
         point = n*length
         if n==0:
@@ -61,26 +64,28 @@ def flatten_sequence(sequence, factor):
 num_crosstest = 10
 factor_val = 0.15
 
-n_epochs = 10000
+epochs = 10000
 patience_lr = 10
 patience_early = 20
 
-sequence_length = 20
-factor_div = 5
+sequence_length = 16
+factor_div = 4
 
 num_thresholds_F1_score = 100.
 min_sep = 3
 
 lr = 1e-3
-batch_size = 128
+batch_size = 256
+hop_size = 128
 
-dropouts = [0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,0.45,0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95]
+dropouts = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]
+#dropouts = [0.3]
 
 for a in range(len(dropouts)):
 
     dropout = dropouts[a]
 
-    Tensor_All = np.load('../../data/interim/Dataset_All.npy')
+    Tensor_All = np.load('../../data/interim/Dataset_All.npy').T
     Classes_All = np.load('../../data/interim/Classes_All.npy')
     
     for i in range(len(Classes_All)):
@@ -89,7 +94,7 @@ for a in range(len(dropouts)):
             Classes_All[i+1]==0.5
             Classes_All[i+2]==0.1
 
-    fix_seeds(0)
+    set_seeds(0)
 
     cut_length = int(Tensor_All.shape[0]/sequence_length)*sequence_length
 
@@ -106,27 +111,33 @@ for a in range(len(dropouts)):
         Tensor_All[n] = Tensor_All_0[point:point+sequence_length]
         Classes_All[n] = Classes_All_0[point:point+sequence_length]
 
-    Tensor_All = (Tensor_All-np.min(Dataset_Train))/(np.max(Dataset_Train)-np.min(Dataset_Train)+1e-16)
+    Tensor_All = np.log(Tensor_All+1e-4)
+    Tensor_All = (Tensor_All-np.min(Tensor_All))/(np.max(Tensor_All)-np.min(Tensor_All)+1e-16)
 
     Tensor_All_Reduced = np.sum(Tensor_All, axis=1)
     Classes_All_Reduced = np.clip(np.sum(Classes_All, axis=1), 0, 1)
 
     skf = KFold(n_splits=num_crosstest)
-    g = 0
 
     validation_accuracy = 0
     test_accuracy = 0
 
+    test_accuracies = np.zeros(num_crosstest)
+    test_precisions = np.zeros(num_crosstest)
+    test_recalls = np.zeros(num_crosstest)
+
+    g = 0
+
     for train_index, test_index in skf.split(Tensor_All_Reduced, Classes_All_Reduced):
 
-        Tensor_Train_Val, Tensor_Test = Tensor_All[train_index], Tensor_All[test_index]
+        Dataset_Train_Val, Dataset_Test = Tensor_All[train_index], Tensor_All[test_index]
         Classes_Train_Val, Classes_Test = Classes_All[train_index], Classes_All[test_index]
 
-        Tensor_Train = Tensor_Train_Val[:int(0.15*Tensor_Train_Val.shape[0])]
-        Tensor_Val = Tensor_Train_Val[int(0.15*Tensor_Train_Val.shape[0]):]
+        Dataset_Train = Dataset_Train_Val[:-int(0.15*Dataset_Train_Val.shape[0])]
+        Dataset_Val = Dataset_Train_Val[-int(0.15*Dataset_Train_Val.shape[0]):]
 
-        Classes_Train = Classes_Train_Val[:int(0.15*Tensor_Train_Val.shape[0])]
-        Classes_Val = Classes_Train_Val[int(0.15*Tensor_Train_Val.shape[0]):]
+        Classes_Train = Classes_Train_Val[:-int(0.15*len(Classes_Train_Val))]
+        Classes_Val = Classes_Train_Val[-int(0.15*len(Classes_Train_Val)):]
 
         Dataset_Train = Dataset_Train.astype('float32')
         Dataset_Val = Dataset_Val.astype('float32')
@@ -136,27 +147,30 @@ for a in range(len(dropouts)):
         Classes_Val = Classes_Val.astype('float32')
         Classes_Test = Classes_Test.astype('float32')
 
-        early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=patience_early, verbose=0, mode='auto', baseline=None, restore_best_weights=False)
-        lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', patience=patience_lr)
+        early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=patience_early, verbose=2, mode='auto', baseline=None, restore_best_weights=False)
+        lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', patience=patience_lr, verbose=2)
 
         with tf.device(gpu_name):
             model = BRNN(sequence_length, dropout)
-            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.MeanSquaredError(), metrics=['loss'])
+            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
             history = model.fit(Dataset_Train, Classes_Train, batch_size=batch_size, epochs=epochs, validation_data=(Dataset_Val, Classes_Val), callbacks=[early_stopping,lr_scheduler], shuffle=True)
 
-        # Calculate validation threshold
+        # Calculate threshold parameter with train-validation set
 
-        predictions = model.predict(Dataset_Val)
+        print('Loading train-val data...')
+
+        predictions = model.predict(Dataset_Train_Val.astype('float32'))
   
-        Classes_Val[Classes_Val==0.1] = 0
-        Classes_Val[Classes_Val==0.5] = 0
-        Classes_Val[Classes_Val==0.2] = 0
+        Classes_Train_Val[Classes_Train_Val==0.1] = 0
+        Classes_Train_Val[Classes_Train_Val==0.5] = 0
+        Classes_Train_Val[Classes_Train_Val==0.2] = 0
+
+        print('Preparing train-val data...')
 
         hop_size_ms = hop_size/22050
 
-        #Prediction = flatten_sequence(sig(predictions), factor_div)
-        Prediction = flatten_sequence(predictions, factor_div)
-        Target = flatten_sequence(Classes_Val, factor_div)
+        Prediction = flatten_sequence(tf.math.sigmoid(predictions), factor_div)
+        Target = flatten_sequence(Classes_Train_Val, factor_div)
 
         factor = np.arange(len(Target))*hop_size_ms
         Target = factor*Target
@@ -181,15 +195,17 @@ for a in range(len(dropouts)):
             ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
             Pred = np.delete(Pred, ind_delete)
             f1_score[i], precision[i], recall[i] = f_measure(Target, Pred, window=0.03)
+            print('Calculating threshold: ' + str(i+1) + '/' + str(len(Threshold)))
 
         threshold = Threshold[f1_score.argmax()]
         validation_accuracy += np.max(f1_score)
 
-        print('Test Accuracy: {:.4f}'.format(np.max(f1_score)))
+        print('Train-Validation Threshold: {:.4f}'.format(threshold))
+        print('Train-Validation Accuracy: {:.4f}'.format(np.max(f1_score)))
 
         # Test
 
-        predictions = model.predict(Dataset_Test)
+        predictions = model.predict(Dataset_Test.astype('float32'))
   
         Classes_Test[Classes_Test==0.1] = 0
         Classes_Test[Classes_Test==0.5] = 0
@@ -197,8 +213,7 @@ for a in range(len(dropouts)):
 
         hop_size_ms = hop_size/22050
 
-        #Prediction = flatten_sequence(sig(predictions), factor_div)
-        Prediction = flatten_sequence(predictions, factor_div)
+        Prediction = flatten_sequence(tf.math.sigmoid(predictions), factor_div)
         Target = flatten_sequence(Classes_Test, factor_div)
 
         factor = np.arange(len(Target))*hop_size_ms
@@ -215,14 +230,50 @@ for a in range(len(dropouts)):
         Pred = Predicted[j]
         ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
         Pred = np.delete(Pred, ind_delete)
-        f1_score, precision, recall = f_measure(Target, Pred, window=0.03)
+        test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=0.03)
 
-        test_accuracy += f1_score
+        print('Test Accuracy: {:.4f}'.format(test_accuracy))
 
-        print('Test Accuracy: {:.4f}'.format(f1_score))
+        if g==0:
+            min_values = []
+
+        min_indices = []
+        for k in range(len(Pred)):
+            abs_diff = Target-Pred[k]
+            diff = np.abs(abs_diff)
+            if diff.argmin() not in min_indices:
+                min_indices.append(diff.argmin())
+            else:
+                continue
+            min_value = abs_diff[diff.argmin()]
+            if abs(min_value)<=0.015:
+                min_values.append(min_value)
+
+        test_accuracies[g] = test_accuracy
+        test_precisions[g] = test_precision
+        test_recalls[g] = test_recall
+        g += 1
+        
+    min_values = np.array(min_values)
+    
+    frame_dev_median = np.median(min_values)
+    frame_dev_mean = np.mean(min_values)
+    frame_dev_std = np.std(min_values)
+    
+    mean_accuracy = np.mean(test_accuracies)
+    mean_precision = np.mean(test_precisions)
+    mean_recall = np.mean(test_recalls)
 
     print('')
+
     print('Dropout: ' + str(dropout))
-    print('Mean Validation Accuracy: {:.4f}'.format(validation_accuracy/num_crosstest))
-    print('Mean Test Accuracy: {:.4f}'.format(test_accuracy/num_crosstest))
+    
+    print('Median Deviation All: ' + str(frame_dev_median))
+    print('Mean Deviation All: ' + str(frame_dev_mean))
+    print('STD Deviation All: ' + str(frame_dev_std))
+    
+    print('Mean Accuracy: ' + str(mean_accuracy))
+    print('Mean Precision: ' + str(mean_precision))
+    print('Mean Recall: ' + str(mean_recall))
+
     print('')
