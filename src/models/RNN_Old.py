@@ -298,7 +298,7 @@ for a in range(len(dropouts)):
         min_values[n] = np.array(min_values[n])
 
         frame_dev_absmeans[a,n] = np.mean(np.abs(min_values[n]))
-        frame_dev_absstds[a,n] = np.std(np.abs(min_values[n]))
+        frame_dev_absstds[a,n] = np.mean(np.abs(min_values[n]))
         frame_dev_means[a,n] = np.mean(min_values[n])
         frame_dev_stds[a,n] = np.std(min_values[n])
         

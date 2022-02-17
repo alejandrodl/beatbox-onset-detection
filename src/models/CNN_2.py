@@ -62,7 +62,7 @@ def flatten_sequence(sequence, factor):
 
     
 
-mode = 'BRNN'
+mode = 'CNN_2'
 
 num_crossval = 7
 
@@ -112,9 +112,9 @@ for a in range(len(dropouts)):
     
     for i in range(len(Classes_TrainVal)):
         if Classes_TrainVal[i]==1:
-            Classes_TrainVal[i-1]==0.2
-            Classes_TrainVal[i+1]==0.5
-            Classes_TrainVal[i+2]==0.1
+            Classes_TrainVal[i-1] = 0.2
+            Classes_TrainVal[i+1] = 0.5
+            Classes_TrainVal[i+2] = 0.1
 
     set_seeds(0)
 
@@ -156,7 +156,7 @@ for a in range(len(dropouts)):
 
     Dataset_Test = Tensor_Test.copy()
 
-    Dataset_Test = Dataset_Test.astype('float32')
+    Dataset_Test = np.expand_dims(Dataset_Test,axis=-1).astype('float32')
     Classes_Test = Classes_Test.astype('float32')
 
     skf = KFold(n_splits=num_crossval)
@@ -178,8 +178,8 @@ for a in range(len(dropouts)):
         Dataset_Train, Dataset_Val = Tensor_TrainVal[train_index], Tensor_TrainVal[test_index]
         Classes_Train, Classes_Val = Classes_TrainVal[train_index], Classes_TrainVal[test_index]
 
-        Dataset_Train = Dataset_Train.astype('float32')
-        Dataset_Val = Dataset_Val.astype('float32')
+        Dataset_Train = np.expand_dims(Dataset_Train,axis=-1).astype('float32')
+        Dataset_Val = np.expand_dims(Dataset_Val,axis=-1).astype('float32')
 
         Classes_Train = Classes_Train.astype('float32')
         Classes_Val = Classes_Val.astype('float32')
@@ -189,7 +189,7 @@ for a in range(len(dropouts)):
 
         with tf.device(gpu_name):
             set_seeds(0)
-            model = BRNN(sequence_length, dropout)
+            model = CNN_T_2(sequence_length, dropout)
             set_seeds(0)
             model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
             set_seeds(0)

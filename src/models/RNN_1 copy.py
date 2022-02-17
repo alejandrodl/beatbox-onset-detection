@@ -18,7 +18,7 @@ from utils import set_seeds
 
 
 
-os.environ["CUDA_VISIBLE_DEVICES"]="2"
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 os.nice(0)
 gpu_name = '/GPU:0'
 
@@ -62,15 +62,15 @@ def flatten_sequence(sequence, factor):
 
     
 
-mode = 'BRNN'
+mode = 'RNN_1'
 
 num_crossval = 7
 
-epochs = 10000
+epochs = 200
 patience_lr = 10
 patience_early = 20
 
-sequence_length = 16
+sequence_length = 8
 factor_div = 4
 
 num_thresholds_F1_score = 100.
@@ -78,6 +78,8 @@ num_thresholds_F1_score = 100.
 lr = 1e-3
 batch_size = 1024
 hop_size = 128
+
+eval_window_lengths = [0.0025,0.005,0.0075,0.01,0.0125,0.015,0.0175,0.02]
 
 dropouts = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]
 #dropouts = [0.3]
@@ -88,16 +90,16 @@ if not os.path.isdir('../../models/' + mode):
 if not os.path.isdir('../../results/' + mode):
     os.mkdir('../../results/' + mode)
 
-frame_dev_absmeans = np.zeros(len(dropouts))
-frame_dev_absstds = np.zeros(len(dropouts))
-frame_dev_means = np.zeros(len(dropouts))
-frame_dev_stds = np.zeros(len(dropouts))
+frame_dev_absmeans = np.zeros((len(dropouts),len(eval_window_lengths)))
+frame_dev_absstds = np.zeros((len(dropouts),len(eval_window_lengths)))
+frame_dev_means = np.zeros((len(dropouts),len(eval_window_lengths)))
+frame_dev_stds = np.zeros((len(dropouts),len(eval_window_lengths)))
 
-accuracies = np.zeros(len(dropouts))
-precisions = np.zeros(len(dropouts))
-recalls = np.zeros(len(dropouts))
+accuracies = np.zeros((len(dropouts),len(eval_window_lengths)))
+precisions = np.zeros((len(dropouts),len(eval_window_lengths)))
+recalls = np.zeros((len(dropouts),len(eval_window_lengths)))
 
-all_thresholds_crossval = np.zeros((len(dropouts),num_crossval))
+all_thresholds_crossval = np.zeros((len(dropouts),len(eval_window_lengths),num_crossval))
 
 for a in range(len(dropouts)):
 
@@ -114,7 +116,6 @@ for a in range(len(dropouts)):
         if Classes_TrainVal[i]==1:
             Classes_TrainVal[i-1]==0.2
             Classes_TrainVal[i+1]==0.5
-            Classes_TrainVal[i+2]==0.1
 
     set_seeds(0)
 
@@ -161,7 +162,11 @@ for a in range(len(dropouts)):
 
     skf = KFold(n_splits=num_crossval)
 
-    thresholds_crossval = np.zeros(num_crossval)
+    thresholds_crossval = np.zeros((len(eval_window_lengths),num_crossval))
+
+    test_accuracies = np.zeros(len(eval_window_lengths))
+    test_precisions = np.zeros(len(eval_window_lengths))
+    test_recalls = np.zeros(len(eval_window_lengths))
 
     validation_accuracy = 0
     test_accuracy = 0
@@ -189,7 +194,7 @@ for a in range(len(dropouts)):
 
         with tf.device(gpu_name):
             set_seeds(0)
-            model = BRNN(sequence_length, dropout)
+            model = RNN_1(sequence_length, dropout)
             set_seeds(0)
             model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
             set_seeds(0)
@@ -209,7 +214,6 @@ for a in range(len(dropouts)):
 
         predictions = model.predict(Dataset_Val.astype('float32'))
   
-        Classes_Val[Classes_Val==0.1] = 0
         Classes_Val[Classes_Val==0.5] = 0
         Classes_Val[Classes_Val==0.2] = 0
 
@@ -239,20 +243,24 @@ for a in range(len(dropouts)):
 
         print('Calculating threshold...')
 
-        f1_score = np.zeros(len(Threshold))
-        precision = np.zeros(len(Threshold))
-        recall = np.zeros(len(Threshold))
-        for i in range(len(Threshold)):
-            Predicted = [1 if item>Threshold[i] else 0 for item in Prediction]
-            Predicted = np.array(Predicted)*factor
-            j = np.where(Predicted!=0)
-            Pred = Predicted[j]
-            ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
-            Pred = np.delete(Pred, ind_delete)
-            f1_score[i], precision[i], recall[i] = f_measure(Target, Pred, window=0.03)
+        max_val_accuracies = np.zeros(len(eval_window_lengths))
+        f1_score = np.zeros((len(eval_window_lengths),len(Threshold)))
+        precision = np.zeros((len(eval_window_lengths),len(Threshold)))
+        recall = np.zeros((len(eval_window_lengths),len(Threshold)))
+        for n in range(len(eval_window_lengths)):
+            print('Calculating threshold for evaluation window length = ' + str(eval_window_lengths[n]))
+            for i in range(len(Threshold)):
+                Predicted = [1 if item>Threshold[i] else 0 for item in Prediction]
+                Predicted = np.array(Predicted)*factor
+                j = np.where(Predicted!=0)
+                Pred = Predicted[j]
+                ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if eval_window_lengths[n]/2>abs(x-y)]
+                Pred = np.delete(Pred, ind_delete)
+                f1_score[n,i], precision[n,i], recall[n,i] = f_measure(Target, Pred, window=eval_window_lengths[n])
+            thresholds_crossval[n,g] = Threshold[f1_score[n].argmax()]
+            max_val_accuracies[n] = f1_score[n].argmax()
 
-        print('Val Accuracy for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(np.max(f1_score)))
-        thresholds_crossval[g] = Threshold[f1_score.argmax()]
+        print('Val Accuracies for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(np.mean(max_val_accuracies)))
         g += 1
 
     # Test
@@ -281,69 +289,69 @@ for a in range(len(dropouts)):
             print('Ensuring Monotonic Target')
             Target[s+1] = Target[s]
 
-    threshold = np.mean(thresholds_crossval)
+    min_values = [[],[],[],[],[],[]]
+    min_indices = [[],[],[],[],[],[]]
+    for n in range(len(eval_window_lengths)):
+        Predicted = [1 if item>np.mean(thresholds_crossval[n]) else 0 for item in Prediction]
+        Predicted = np.array(Predicted)*factor
+        j = np.where(Predicted!=0)
+        Pred = Predicted[j]
+        ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if eval_window_lengths[n]/2>abs(x-y)]
+        Pred = np.delete(Pred, ind_delete)
+        test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=eval_window_lengths[n])
+        test_accuracies[n] = test_accuracy
+        test_precisions[n] = test_precision
+        test_recalls[n] = test_recall
+        for k in range(len(Pred)):
+            abs_diff = Target-Pred[k]
+            diff = np.abs(abs_diff)
+            if diff.argmin() not in min_indices[n]:
+                min_indices[n].append(diff.argmin())
+            else:
+                continue
+            min_value = abs_diff[diff.argmin()]
+            if abs(min_value)<=eval_window_lengths[n]/2:
+                min_values[n].append(min_value)
 
-    Predicted = [1 if item>threshold else 0 for item in Prediction]
-    Predicted = np.array(Predicted)*factor
-    j = np.where(Predicted!=0)
-    Pred = Predicted[j]
-    ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
-    Pred = np.delete(Pred, ind_delete)
-    test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=0.03)
+    for n in range(len(eval_window_lengths)):
 
-    print('Test Accuracy: {:.4f}'.format(test_accuracy))
+        min_values[n] = np.array(min_values[n])
 
-    min_values = []
-    min_indices = []
-    for k in range(len(Pred)):
-        abs_diff = Target-Pred[k]
-        diff = np.abs(abs_diff)
-        if diff.argmin() not in min_indices:
-            min_indices.append(diff.argmin())
-        else:
-            continue
-        min_value = abs_diff[diff.argmin()]
-        if abs(min_value)<=0.015:
-            min_values.append(min_value)
+        frame_dev_absmeans[a,n] = np.mean(np.abs(min_values[n]))
+        frame_dev_absstds[a,n] = np.std(np.abs(min_values[n]))
+        frame_dev_means[a,n] = np.mean(min_values[n])
+        frame_dev_stds[a,n] = np.std(min_values[n])
         
-    min_values = np.array(min_values)
-    
-    frame_dev_absmeans[a] = np.mean(np.abs(min_values))
-    frame_dev_absstds[a] = np.std(np.abs(min_values))
-    frame_dev_means[a] = np.mean(min_values)
-    frame_dev_stds[a] = np.std(min_values)
-    
-    accuracies[a] = test_accuracy
-    precisions[a] = test_precision
-    recalls[a] = test_recall
-    all_thresholds_crossval[a] = thresholds_crossval
+        accuracies[a,n] = test_accuracies[n]
+        precisions[a,n] = test_precisions[n]
+        recalls[a,n] = test_recalls[n]
+        all_thresholds_crossval[a,n] = thresholds_crossval[n]
 
-    print('')
+        print('')
 
-    print('Dropout: ' + str(dropout))
-    
-    print('Mean Absolute Onset Deviation: ' + str(frame_dev_absmeans[a]))
-    print('STD Absolute Onset Deviation: ' + str(frame_dev_absstds[a]))
-    print('Mean Deviation: ' + str(frame_dev_means[a]))
-    print('STD Deviation: ' + str(frame_dev_stds[a]))
-    
-    print('Accuracy: ' + str(accuracies[a]))
-    print('Precision: ' + str(precisions[a]))
-    print('Recall: ' + str(recalls[a]))
-    print('Cross-Validated Thresholds: ' + str(all_thresholds_crossval[a]))
+        print('Dropout: ' + str(dropout))
+        
+        print('Mean Absolute Onset Deviation: ' + str(frame_dev_absmeans[a,n]))
+        print('STD Absolute Onset Deviation: ' + str(frame_dev_absstds[a,n]))
+        print('Mean Deviation: ' + str(frame_dev_means[a,n]))
+        print('STD Deviation: ' + str(frame_dev_stds[a,n]))
+        
+        print('Accuracy: ' + str(accuracies[a,n]))
+        print('Precision: ' + str(precisions[a,n]))
+        print('Recall: ' + str(recalls[a,n]))
+        print('Cross-Validated Thresholds: ' + str(all_thresholds_crossval[a,n]))
 
-    print('')
+        print('')
 
-    np.save('../../results/' + mode + '/frame_dev_absstds', frame_dev_absstds)
-    np.save('../../results/' + mode + '/frame_dev_absmeans', frame_dev_absmeans)
-    np.save('../../results/' + mode + '/frame_dev_means', frame_dev_means)
-    np.save('../../results/' + mode + '/frame_dev_stds', frame_dev_stds)
+        np.save('../../results/' + mode + '/frame_dev_absstds', frame_dev_absstds)
+        np.save('../../results/' + mode + '/frame_dev_absmeans', frame_dev_absmeans)
+        np.save('../../results/' + mode + '/frame_dev_means', frame_dev_means)
+        np.save('../../results/' + mode + '/frame_dev_stds', frame_dev_stds)
 
-    np.save('../../results/' + mode + '/accuracies', accuracies)
-    np.save('../../results/' + mode + '/precisions', precisions)
-    np.save('../../results/' + mode + '/recalls', recalls)
-    np.save('../../results/' + mode + '/thresholds', all_thresholds_crossval)
+        np.save('../../results/' + mode + '/accuracies', accuracies)
+        np.save('../../results/' + mode + '/precisions', precisions)
+        np.save('../../results/' + mode + '/recalls', recalls)
+        np.save('../../results/' + mode + '/thresholds', all_thresholds_crossval)
 
-    if accuracies[a]==np.max(accuracies):
-        for g in range(num_crossval):
-            models[idx_best_model].save_weights('../../models/' + mode + '/model_dropout_' + str(dropout) + '_crossval_' + str(idx_best_model) + '.h5')
+        if accuracies[a,n]==np.max(accuracies[:,n]):
+            model.save_weights('../../models/' + mode + '/model_window_' + str(eval_window_lengths[n]) + '.h5')
