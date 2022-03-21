@@ -62,7 +62,7 @@ def flatten_sequence(sequence, factor):
 
     
 
-mode = 'CNN_1'
+mode = 'CNN_1_1'
 
 num_crossval = 7
 
@@ -71,7 +71,7 @@ patience_lr = 10
 patience_early = 20
 
 sequence_length = 16
-hop = 4
+hop = 1
 
 num_thresholds_F1_score = 100.
 
@@ -79,7 +79,7 @@ lr = 1e-3
 batch_size = 1024
 hop_size = 128
 
-dropouts = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]
+dropouts = [0,0.05,0.1,0.15,0.2,0.25,0.3]
 #dropouts = [0.3]
 
 if not os.path.isdir('../../models/' + mode):
@@ -123,21 +123,16 @@ for a in range(len(dropouts)):
 
     length = Tensor_TrainVal_Raw.shape[0]-sequence_length+1
     Tensor_TrainVal = np.zeros(shape=(length,sequence_length,Tensor_TrainVal_Raw.shape[1]))
-    Classes_TrainVal = np.zeros(shape=(length,sequence_length))
     for n in range(sequence_length):
         Tensor_TrainVal[:,n] = Tensor_TrainVal_Raw[n:length+n]
-        Classes_TrainVal[:,n] = Classes_TrainVal_Raw[n:length+n]
-    Tensor_TrainVal = Tensor_TrainVal[::hop]
-    Classes_TrainVal = Classes_TrainVal[::hop]
 
     length = Tensor_Test_Raw.shape[0]-sequence_length+1
     Tensor_Test = np.zeros(shape=(length,sequence_length,Tensor_Test_Raw.shape[1]))
-    Classes_Test = np.zeros(shape=(length,sequence_length))
     for n in range(sequence_length):
         Tensor_Test[:,n] = Tensor_Test_Raw[n:length+n]
-        Classes_Test[:,n] = Classes_Test_Raw[n:length+n]
-    Tensor_Test = Tensor_Test[::hop]
-    Classes_Test = Classes_Test[::hop]
+
+    Classes_TrainVal = Classes_TrainVal_Raw[sequence_length-1:]
+    Classes_Test = Classes_Test_Raw[sequence_length-1:]
 
     Tensor_TrainVal = np.log(Tensor_TrainVal+1e-4)
     min_norm = np.min(Tensor_TrainVal)
@@ -147,9 +142,9 @@ for a in range(len(dropouts)):
     Tensor_Test = (Tensor_Test-min_norm)/(max_norm-min_norm+1e-16)
 
     Tensor_TrainVal_Reduced = np.sum(Tensor_TrainVal, axis=1)
-    Classes_TrainVal_Reduced = np.clip(np.sum(Classes_TrainVal, axis=1), 0, 1)
+    Classes_TrainVal_Reduced = np.clip(Classes_TrainVal, 0, 1)
     Tensor_Test_Reduced = np.sum(Tensor_Test, axis=1)
-    Classes_Test_Reduced = np.clip(np.sum(Classes_Test, axis=1), 0, 1)
+    Classes_Test_Reduced = np.clip(Classes_Test, 0, 1)
 
     Dataset_Test = Tensor_Test.copy()
 
@@ -159,6 +154,7 @@ for a in range(len(dropouts)):
     skf = KFold(n_splits=num_crossval)
 
     thresholds_crossval = np.zeros(num_crossval)
+    pred_norm = []
 
     validation_accuracy = 0
     test_accuracy = 0
@@ -168,7 +164,6 @@ for a in range(len(dropouts)):
     set_seeds(0)
 
     models = []
-    pred_norm = []
     g = 0
 
     for train_index, test_index in skf.split(Tensor_TrainVal_Reduced, Classes_TrainVal_Reduced):
@@ -205,8 +200,8 @@ for a in range(len(dropouts)):
 
         print('Processing validation data...')
 
-        #pred_train = model.predict(Dataset_Train.astype('float32'))
-        #pred_val = model.predict(Dataset_Val.astype('float32'))
+        #pred_train = flatten_sequence(model.predict(Dataset_Train.astype('float32')),hop)
+        #pred_val = flatten_sequence(model.predict(Dataset_Val.astype('float32')),hop)
         #pred_all = np.concatenate((pred_train,pred_val))
 
         #pred_norm.append([np.max(pred_all),np.min(pred_all)])
@@ -215,12 +210,12 @@ for a in range(len(dropouts)):
         hop_size_ms = hop_size/22050
 
         #Prediction = (pred_val-pred_norm[g][1])/(pred_norm[g][0]-pred_norm[g][1])
-        #Target = flatten_sequence(Classes_Val,hop)
+        #Target = Classes_Val
 
         predictions = model.predict(Dataset_Val.astype('float32'))
-
-        Prediction = tf.math.sigmoid(flatten_sequence(predictions, hop))
-        Target = flatten_sequence(Classes_Val, hop)
+        
+        Prediction = tf.math.sigmoid(predictions)
+        Target = Classes_Val
 
         factor = np.arange(len(Target))*hop_size_ms
         Target = factor*Target
@@ -268,11 +263,11 @@ for a in range(len(dropouts)):
 
     hop_size_ms = hop_size/22050
 
-    #Prediction = (flatten_sequence(predictions,hop)-pred_norm[idx_best_model][1])/(pred_norm[idx_best_model][0]-pred_norm[idx_best_model][1])
-    #Target = flatten_sequence(Classes_Test, hop)
+    #Prediction = (predictions-pred_norm[idx_best_model][1])/(pred_norm[idx_best_model][0]-pred_norm[idx_best_model][1])
+    #Target = Classes_Test
 
-    Prediction = tf.math.sigmoid(flatten_sequence(predictions, hop))
-    Target = flatten_sequence(Classes_Test, hop)
+    Prediction = tf.math.sigmoid(predictions)
+    Target = Classes_Test
 
     factor = np.arange(len(Target))*hop_size_ms
     Target = factor*Target

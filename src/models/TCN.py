@@ -16,9 +16,13 @@ from sklearn.model_selection import StratifiedKFold
 from networks import *
 from utils import set_seeds
 
+from tcn import TCN, tcn_full_summary
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.models import Sequential
 
 
-os.environ["CUDA_VISIBLE_DEVICES"]="2"
+
+os.environ["CUDA_VISIBLE_DEVICES"]="3"
 os.nice(0)
 gpu_name = '/GPU:0'
 
@@ -62,7 +66,7 @@ def flatten_sequence(sequence, factor):
 
     
 
-mode = 'CNN_1'
+mode = 'BRNN_3'
 
 num_crossval = 7
 
@@ -70,8 +74,8 @@ epochs = 10000
 patience_lr = 10
 patience_early = 20
 
-sequence_length = 16
-hop = 4
+sequence_length = 1024
+factor_div = 4
 
 num_thresholds_F1_score = 100.
 
@@ -110,11 +114,11 @@ for a in range(len(dropouts)):
     Tensor_Test_Raw = np.load('../../data/interim/Dataset_Test.npy').T
     Classes_Test_Raw = np.load('../../data/interim/Classes_Test.npy')
     
-    for i in range(len(Classes_TrainVal_Raw)):
-        if Classes_TrainVal_Raw[i]==1:
-            Classes_TrainVal_Raw[i-1] = 0.2
-            Classes_TrainVal_Raw[i+1] = 0.5
-            Classes_TrainVal_Raw[i+2] = 0.1
+    for i in range(len(Classes_TrainVal)):
+        if Classes_TrainVal[i]==1:
+            Classes_TrainVal[i-1] = 0.2
+            Classes_TrainVal[i+1] = 0.5
+            Classes_TrainVal[i+2] = 0.1
 
     set_seeds(0)
 
@@ -127,8 +131,8 @@ for a in range(len(dropouts)):
     for n in range(sequence_length):
         Tensor_TrainVal[:,n] = Tensor_TrainVal_Raw[n:length+n]
         Classes_TrainVal[:,n] = Classes_TrainVal_Raw[n:length+n]
-    Tensor_TrainVal = Tensor_TrainVal[::hop]
-    Classes_TrainVal = Classes_TrainVal[::hop]
+    Tensor_TrainVal = Tensor_TrainVal[::factor_div]
+    Classes_TrainVal = Classes_TrainVal[::factor_div]
 
     length = Tensor_Test_Raw.shape[0]-sequence_length+1
     Tensor_Test = np.zeros(shape=(length,sequence_length,Tensor_Test_Raw.shape[1]))
@@ -136,8 +140,8 @@ for a in range(len(dropouts)):
     for n in range(sequence_length):
         Tensor_Test[:,n] = Tensor_Test_Raw[n:length+n]
         Classes_Test[:,n] = Classes_Test_Raw[n:length+n]
-    Tensor_Test = Tensor_Test[::hop]
-    Classes_Test = Classes_Test[::hop]
+    Tensor_Test = Tensor_Test[::factor_div]
+    Classes_Test = Classes_Test[::factor_div]
 
     Tensor_TrainVal = np.log(Tensor_TrainVal+1e-4)
     min_norm = np.min(Tensor_TrainVal)
@@ -153,41 +157,80 @@ for a in range(len(dropouts)):
 
     Dataset_Test = Tensor_Test.copy()
 
-    Dataset_Test = np.expand_dims(Dataset_Test,axis=-1).astype('float32')
+    Dataset_Test = Dataset_Test.astype('float32')
     Classes_Test = Classes_Test.astype('float32')
-
-    skf = KFold(n_splits=num_crossval)
 
     thresholds_crossval = np.zeros(num_crossval)
 
-    validation_accuracy = 0
-    test_accuracy = 0
 
-    min_val_loss = np.inf
 
-    set_seeds(0)
 
-    models = []
-    pred_norm = []
-    g = 0
 
-    for train_index, test_index in skf.split(Tensor_TrainVal_Reduced, Classes_TrainVal_Reduced):
+# if time_steps > tcn_layer.receptive_field, then we should not
+# be able to solve this task.
+batch_size = None
+time_steps = 16
+input_dim = 1
 
-        Dataset_Train, Dataset_Val = Tensor_TrainVal[train_index], Tensor_TrainVal[test_index]
-        Classes_Train, Classes_Val = Classes_TrainVal[train_index], Classes_TrainVal[test_index]
+def get_x_y(size=1000):
+    import numpy as np
+    pos_indices = np.random.choice(size, size=int(size // 2), replace=False)
+    x_train = np.zeros(shape=(size, time_steps, 1))
+    y_train = np.zeros(shape=(size, 1))
+    x_train[pos_indices, 0] = 1.0  # we introduce the target in the first timestep of the sequence.
+    y_train[pos_indices, 0] = 1.0  # the task is to see if the TCN can go back in time to find it.
+    return x_train, y_train
 
-        Dataset_Train = np.expand_dims(Dataset_Train,axis=-1).astype('float32')
-        Dataset_Val = np.expand_dims(Dataset_Val,axis=-1).astype('float32')
 
-        Classes_Train = Classes_Train.astype('float32')
-        Classes_Val = Classes_Val.astype('float32')
+tcn_layer = TCN(input_shape=(time_steps, input_dim))
+# The receptive field tells you how far the model can see in terms of timesteps.
+print('Receptive field size =', tcn_layer.receptive_field)
+
+m = Sequential([
+    tcn_layer,
+    Dense(1)
+])
+
+m.compile(optimizer='adam', loss='mse')
+
+tcn_full_summary(m, expand_residual_blocks=False)
+
+x, y = get_x_y()
+m.fit(x, y, epochs=10, validation_split=0.2)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
         early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0, patience=patience_early, verbose=2, mode='auto', baseline=None, restore_best_weights=True)
         lr_scheduler = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', patience=patience_lr, verbose=2)
 
         with tf.device(gpu_name):
             set_seeds(0)
-            model = CNN_T_1(sequence_length, dropout)
+            model = BRNN_3(sequence_length, dropout)
             set_seeds(0)
             model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
             set_seeds(0)
@@ -203,24 +246,18 @@ for a in range(len(dropouts)):
 
         # Calculate threshold parameter with validation set
 
-        print('Processing validation data...')
-
-        #pred_train = model.predict(Dataset_Train.astype('float32'))
-        #pred_val = model.predict(Dataset_Val.astype('float32'))
-        #pred_all = np.concatenate((pred_train,pred_val))
-
-        #pred_norm.append([np.max(pred_all),np.min(pred_all)])
-
-        Classes_Val[Classes_Val!=1] = 0
-        hop_size_ms = hop_size/22050
-
-        #Prediction = (pred_val-pred_norm[g][1])/(pred_norm[g][0]-pred_norm[g][1])
-        #Target = flatten_sequence(Classes_Val,hop)
+        print('Loading validation data...')
 
         predictions = model.predict(Dataset_Val.astype('float32'))
+  
+        Classes_Val[Classes_Val!=1] = 0
 
-        Prediction = tf.math.sigmoid(flatten_sequence(predictions, hop))
-        Target = flatten_sequence(Classes_Val, hop)
+        print('Preparing validation data...')
+
+        hop_size_ms = hop_size/22050
+
+        Prediction = flatten_sequence(tf.math.sigmoid(predictions), factor_div)
+        Target = flatten_sequence(Classes_Val, factor_div)
 
         factor = np.arange(len(Target))*hop_size_ms
         Target = factor*Target
@@ -245,11 +282,10 @@ for a in range(len(dropouts)):
         precision = np.zeros(len(Threshold))
         recall = np.zeros(len(Threshold))
         for i in range(len(Threshold)):
-            #Predicted = [1 if item>Threshold[i] else 0 for item in Prediction]
-            #Predicted = np.array(Predicted)*factor
-            #j = np.where(Predicted!=0)[0]
-            #Pred = Prediction[j]
-            Pred = np.argwhere(Prediction>=Threshold[i])[:,0]*hop_size_ms
+            Predicted = [1 if item>Threshold[i] else 0 for item in Prediction]
+            Predicted = np.array(Predicted)*factor
+            j = np.where(Predicted!=0)
+            Pred = Predicted[j]
             ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
             Pred = np.delete(Pred, ind_delete)
             f1_score[i], precision[i], recall[i] = f_measure(Target, Pred, window=0.03)
@@ -268,11 +304,8 @@ for a in range(len(dropouts)):
 
     hop_size_ms = hop_size/22050
 
-    #Prediction = (flatten_sequence(predictions,hop)-pred_norm[idx_best_model][1])/(pred_norm[idx_best_model][0]-pred_norm[idx_best_model][1])
-    #Target = flatten_sequence(Classes_Test, hop)
-
-    Prediction = tf.math.sigmoid(flatten_sequence(predictions, hop))
-    Target = flatten_sequence(Classes_Test, hop)
+    Prediction = flatten_sequence(tf.math.sigmoid(predictions), factor_div)
+    Target = flatten_sequence(Classes_Test, factor_div)
 
     factor = np.arange(len(Target))*hop_size_ms
     Target = factor*Target
@@ -289,11 +322,10 @@ for a in range(len(dropouts)):
 
     threshold = np.mean(thresholds_crossval)
 
-    #Predicted = [1 if item>Threshold[i] else 0 for item in Prediction]
-    #Predicted = np.array(Predicted)*factor
-    #j = np.where(Predicted!=0)[0]
-    #Pred = Prediction[j]
-    Pred = np.argwhere(Prediction>=threshold)[:,0]*hop_size_ms
+    Predicted = [1 if item>threshold else 0 for item in Prediction]
+    Predicted = np.array(Predicted)*factor
+    j = np.where(Predicted!=0)
+    Pred = Predicted[j]
     ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
     Pred = np.delete(Pred, ind_delete)
     test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=0.03)

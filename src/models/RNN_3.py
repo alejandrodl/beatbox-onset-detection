@@ -66,11 +66,11 @@ mode = 'RNN_3'
 
 num_crossval = 7
 
-epochs = 200
+epochs = 10000
 patience_lr = 10
 patience_early = 20
 
-sequence_length = 8
+sequence_length = 12
 
 num_thresholds_F1_score = 100.
 
@@ -78,10 +78,8 @@ lr = 1e-3
 batch_size = 1024
 hop_size = 128
 
+dropouts = [0.1,0.1000001]
 eval_window_lengths = [0.005,0.01,0.015,0.02,0.025,0.03]
-
-dropouts = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]
-#dropouts = [0.3]
 
 if not os.path.isdir('../../models/' + mode):
     os.mkdir('../../models/' + mode)
@@ -111,19 +109,29 @@ for a in range(len(dropouts)):
     Tensor_Test_Raw = np.load('../../data/interim/Dataset_Test.npy').T
     Classes_Test = np.load('../../data/interim/Classes_Test.npy')
     
-    for i in range(len(Classes_TrainVal)):
+    '''for i in range(len(Classes_TrainVal)):
         if Classes_TrainVal[i]==1:
-            Classes_TrainVal[i-1]==0.3
-            Classes_TrainVal[i+1]==0.7
-            if Classes_TrainVal[i+2]!=1:
-                Classes_TrainVal[i+2]==0.2
+            Classes_TrainVal[i-1] = 0.2
+            Classes_TrainVal[i+1] = 0.5
+            Classes_TrainVal[i+2] = 0.1'''
+
+    if dropout==0.1:
+        for i in range(len(Classes_TrainVal)):
+            if Classes_TrainVal[i]==1:
+                Classes_TrainVal[i+1] = 0.999
+                Classes_TrainVal[i+2] = 0.999
+                Classes_TrainVal[i+3] = 0.999
+                Classes_TrainVal[i+4] = 0.999
+    else:
+        for i in range(len(Classes_TrainVal)):
+            if Classes_TrainVal[i]==1:
+                Classes_TrainVal[i+1] = 0.999
+                Classes_TrainVal[i+2] = 0.999
+                Classes_TrainVal[i+3] = 0.999
+                Classes_TrainVal[i+4] = 0.999
+                Classes_TrainVal[i+5] = 0.999
 
     set_seeds(0)
-
-    print(Tensor_TrainVal_Raw.shape)
-    print(Classes_TrainVal.shape)
-    print(Tensor_Test_Raw.shape)
-    print(Classes_Test.shape)
 
     #Tensor_TrainVal = np.lib.stride_tricks.sliding_window_view(Tensor_TrainVal,(sequence_length,Tensor_TrainVal.shape[1]))[:,0,:,:]
     #Tensor_Test = np.lib.stride_tricks.sliding_window_view(Tensor_Test,(sequence_length,Tensor_Test.shape[1]))[:,0,:,:]
@@ -140,11 +148,6 @@ for a in range(len(dropouts)):
 
     Classes_TrainVal = Classes_TrainVal[sequence_length-1:]
     Classes_Test = Classes_Test[sequence_length-1:]
-
-    print(Tensor_TrainVal.shape)
-    print(Tensor_Test.shape)
-    print(Classes_TrainVal.shape)
-    print(Classes_Test.shape)
 
     Tensor_TrainVal = np.log(Tensor_TrainVal+1e-4)
     min_norm = np.min(Tensor_TrainVal)
@@ -166,10 +169,7 @@ for a in range(len(dropouts)):
     skf = KFold(n_splits=num_crossval)
 
     thresholds_crossval = np.zeros((len(eval_window_lengths),num_crossval))
-
-    test_accuracies = np.zeros(len(eval_window_lengths))
-    test_precisions = np.zeros(len(eval_window_lengths))
-    test_recalls = np.zeros(len(eval_window_lengths))
+    accuracies_val = np.zeros((len(eval_window_lengths),num_crossval))
 
     validation_accuracy = 0
     test_accuracy = 0
@@ -179,6 +179,7 @@ for a in range(len(dropouts)):
     set_seeds(0)
 
     models = []
+    pred_norm = []
     g = 0
 
     for train_index, test_index in skf.split(Tensor_TrainVal_Reduced, Classes_TrainVal_Reduced):
@@ -197,7 +198,7 @@ for a in range(len(dropouts)):
 
         with tf.device(gpu_name):
             set_seeds(0)
-            model = RNN_3(sequence_length, dropout)
+            model = RNN_1(sequence_length, dropout)
             set_seeds(0)
             model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
             set_seeds(0)
@@ -213,19 +214,23 @@ for a in range(len(dropouts)):
 
         # Calculate threshold parameter with validation set
 
-        print('Loading validation data...')
+        print('Processing validation data...')
 
-        predictions = model.predict(Dataset_Val.astype('float32'))
-  
-        Classes_Val[Classes_Val==0.7] = 0
-        Classes_Val[Classes_Val==0.3] = 0
-        Classes_Val[Classes_Val==0.2] = 0
+        #pred_train = model.predict(Dataset_Train.astype('float32'))
+        #pred_val = model.predict(Dataset_Val.astype('float32'))
+        #pred_all = np.concatenate((pred_train,pred_val))
 
-        print('Preparing validation data...')
+        #pred_norm.append([np.max(pred_all),np.min(pred_all)])
 
+        Classes_Val[Classes_Val!=1] = 0
         hop_size_ms = hop_size/22050
 
-        Prediction = tf.math.sigmoid(predictions)[:,0].numpy()
+        #Prediction = (pred_val-pred_norm[g][1])/(pred_norm[g][0]-pred_norm[g][1])
+        #Target = Classes_Val
+
+        predictions = model.predict(Dataset_Val.astype('float32'))
+        
+        Prediction = tf.math.sigmoid(predictions)
         Target = Classes_Val
 
         factor = np.arange(len(Target))*hop_size_ms
@@ -266,11 +271,11 @@ for a in range(len(dropouts)):
                         print('Ensuring Monotonic Predictions')
                         Pred[s+1] = Pred[s]
                 f1_score[n,i], precision[n,i], recall[n,i] = f_measure(Target, Pred, window=eval_window_lengths[n])
-            print(np.max(f1_score[n]))
+            accuracies_val[n,g] = np.max(f1_score[n])
             thresholds_crossval[n,g] = Threshold[f1_score[n].argmax()]
             max_val_accuracies[n] = np.max(f1_score[n])
 
-        print('Val Accuracies for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(np.mean(max_val_accuracies)))
+        print('Val Accuracies for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(accuracies_val[:,g]))
         g += 1
 
     # Test
@@ -283,7 +288,10 @@ for a in range(len(dropouts)):
 
     hop_size_ms = hop_size/22050
 
-    Prediction = tf.math.sigmoid(predictions).numpy()
+    #Prediction = (predictions-pred_norm[idx_best_model][1])/(pred_norm[idx_best_model][0]-pred_norm[idx_best_model][1])
+    #Target = Classes_Test
+
+    Prediction = tf.math.sigmoid(predictions)
     Target = Classes_Test
 
     factor = np.arange(len(Target))*hop_size_ms
@@ -314,9 +322,6 @@ for a in range(len(dropouts)):
                 print('Ensuring Monotonic Predictions')
                 Pred[s+1] = Pred[s]
         test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=eval_window_lengths[n])
-        test_accuracies[n] = test_accuracy
-        test_precisions[n] = test_precision
-        test_recalls[n] = test_recall
         for k in range(len(Pred)):
             abs_diff = Target-Pred[k]
             diff = np.abs(abs_diff)
@@ -328,8 +333,6 @@ for a in range(len(dropouts)):
             if abs(min_value)<=eval_window_lengths[n]/2:
                 min_values[n].append(min_value)
 
-    for n in range(len(eval_window_lengths)):
-
         min_values[n] = np.array(min_values[n])
 
         frame_dev_absmeans[a,n] = np.mean(np.abs(min_values[n]))
@@ -337,9 +340,9 @@ for a in range(len(dropouts)):
         frame_dev_means[a,n] = np.mean(min_values[n])
         frame_dev_stds[a,n] = np.std(min_values[n])
         
-        accuracies[a,n] = test_accuracies[n]
-        precisions[a,n] = test_precisions[n]
-        recalls[a,n] = test_recalls[n]
+        accuracies[a,n] = test_accuracy
+        precisions[a,n] = test_precision
+        recalls[a,n] = test_recall
         all_thresholds_crossval[a,n] = thresholds_crossval[n]
 
         print('')

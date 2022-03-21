@@ -6,6 +6,7 @@ import scipy as sp
 import matplotlib.pyplot as plt
 
 import tensorflow as tf
+import optuna
 
 from sklearn.metrics import f1_score
 from mir_eval.onset import f_measure
@@ -37,7 +38,7 @@ def flatten_sequence(sequence, factor):
     length = seq_length//factor
     seq_length_diff = seq_length - length
 
-    sequence_flat = np.zeros(tf.size(Dataset_Test).numpy()*factor)
+    sequence_flat = np.zeros(tf.size(sequence).numpy()*factor)
     for n in range(len(sequence)):
         point = n*length
         if n==0:
@@ -66,12 +67,12 @@ mode = 'CNN_1'
 
 num_crossval = 7
 
-epochs = 10000
+epochs = 200
 patience_lr = 10
 patience_early = 20
 
 sequence_length = 16
-hop = 4
+factor_div = 4
 
 num_thresholds_F1_score = 100.
 
@@ -79,8 +80,7 @@ lr = 1e-3
 batch_size = 1024
 hop_size = 128
 
-dropouts = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]
-#dropouts = [0.3]
+dropout = 0.2
 
 if not os.path.isdir('../../models/' + mode):
     os.mkdir('../../models/' + mode)
@@ -88,20 +88,15 @@ if not os.path.isdir('../../models/' + mode):
 if not os.path.isdir('../../results/' + mode):
     os.mkdir('../../results/' + mode)
 
-frame_dev_absmeans = np.zeros(len(dropouts))
-frame_dev_absstds = np.zeros(len(dropouts))
-frame_dev_means = np.zeros(len(dropouts))
-frame_dev_stds = np.zeros(len(dropouts))
+def objective(trial):
 
-accuracies = np.zeros(len(dropouts))
-precisions = np.zeros(len(dropouts))
-recalls = np.zeros(len(dropouts))
+    #overall_shift = trial.suggest_int('overall_shift', -2, 2)
+    onset_minus_2 = trial.suggest_float('onset_minus_2', 0, 1)
+    onset_minus_1 = trial.suggest_float('onset_minus_1', 0, 1)
+    onset_plus_1 = trial.suggest_float('onset_plus_1', 0, 1)
+    onset_plus_2 = trial.suggest_float('onset_plus_2', 0, 1)
 
-all_thresholds_crossval = np.zeros((len(dropouts),num_crossval))
-
-for a in range(len(dropouts)):
-
-    dropout = dropouts[a]
+    print('Onset Function: ' + str([onset_minus_2,onset_minus_1,1,onset_plus_1,onset_plus_2]))
 
     set_seeds(0)
 
@@ -109,12 +104,24 @@ for a in range(len(dropouts)):
     Classes_TrainVal_Raw = np.load('../../data/interim/Classes_TrainVal.npy')
     Tensor_Test_Raw = np.load('../../data/interim/Dataset_Test.npy').T
     Classes_Test_Raw = np.load('../../data/interim/Classes_Test.npy')
-    
+
+    '''if overall_shift>0:
+        Classes_TrainVal = np.concatenate((np.zeros(overall_shift),Classes_TrainVal[:-overall_shift]))
+        Classes_Test = np.concatenate((np.zeros(overall_shift),Classes_Test[:-overall_shift]))
+    elif overall_shift<0:
+        Classes_TrainVal = np.concatenate((Classes_TrainVal[-overall_shift:],np.zeros(-overall_shift)))
+        Classes_Test = np.concatenate((Classes_Test[-overall_shift:],np.zeros(-overall_shift)))'''
+ 
+    # Preprocess annotations
+
     for i in range(len(Classes_TrainVal_Raw)):
         if Classes_TrainVal_Raw[i]==1:
-            Classes_TrainVal_Raw[i-1] = 0.2
-            Classes_TrainVal_Raw[i+1] = 0.5
-            Classes_TrainVal_Raw[i+2] = 0.1
+            if Classes_TrainVal_Raw[i-2]!=1:
+                Classes_TrainVal_Raw[i-2] = onset_minus_2
+            Classes_TrainVal_Raw[i-1] = onset_minus_1
+            Classes_TrainVal_Raw[i+1] = onset_plus_1
+            if Classes_TrainVal_Raw[i+2]!=1:
+                Classes_TrainVal_Raw[i+2] = onset_plus_2
 
     set_seeds(0)
 
@@ -127,8 +134,8 @@ for a in range(len(dropouts)):
     for n in range(sequence_length):
         Tensor_TrainVal[:,n] = Tensor_TrainVal_Raw[n:length+n]
         Classes_TrainVal[:,n] = Classes_TrainVal_Raw[n:length+n]
-    Tensor_TrainVal = Tensor_TrainVal[::hop]
-    Classes_TrainVal = Classes_TrainVal[::hop]
+    Tensor_TrainVal = Tensor_TrainVal[::factor_div]
+    Classes_TrainVal = Classes_TrainVal[::factor_div]
 
     length = Tensor_Test_Raw.shape[0]-sequence_length+1
     Tensor_Test = np.zeros(shape=(length,sequence_length,Tensor_Test_Raw.shape[1]))
@@ -136,8 +143,8 @@ for a in range(len(dropouts)):
     for n in range(sequence_length):
         Tensor_Test[:,n] = Tensor_Test_Raw[n:length+n]
         Classes_Test[:,n] = Classes_Test_Raw[n:length+n]
-    Tensor_Test = Tensor_Test[::hop]
-    Classes_Test = Classes_Test[::hop]
+    Tensor_Test = Tensor_Test[::factor_div]
+    Classes_Test = Classes_Test[::factor_div]
 
     Tensor_TrainVal = np.log(Tensor_TrainVal+1e-4)
     min_norm = np.min(Tensor_TrainVal)
@@ -158,6 +165,7 @@ for a in range(len(dropouts)):
 
     skf = KFold(n_splits=num_crossval)
 
+    accuracies_val = np.zeros(num_crossval)
     thresholds_crossval = np.zeros(num_crossval)
 
     validation_accuracy = 0
@@ -168,7 +176,6 @@ for a in range(len(dropouts)):
     set_seeds(0)
 
     models = []
-    pred_norm = []
     g = 0
 
     for train_index, test_index in skf.split(Tensor_TrainVal_Reduced, Classes_TrainVal_Reduced):
@@ -203,24 +210,18 @@ for a in range(len(dropouts)):
 
         # Calculate threshold parameter with validation set
 
-        print('Processing validation data...')
-
-        #pred_train = model.predict(Dataset_Train.astype('float32'))
-        #pred_val = model.predict(Dataset_Val.astype('float32'))
-        #pred_all = np.concatenate((pred_train,pred_val))
-
-        #pred_norm.append([np.max(pred_all),np.min(pred_all)])
-
-        Classes_Val[Classes_Val!=1] = 0
-        hop_size_ms = hop_size/22050
-
-        #Prediction = (pred_val-pred_norm[g][1])/(pred_norm[g][0]-pred_norm[g][1])
-        #Target = flatten_sequence(Classes_Val,hop)
+        print('Loading validation data...')
 
         predictions = model.predict(Dataset_Val.astype('float32'))
+  
+        Classes_Val[Classes_Val!=1] = 0
 
-        Prediction = tf.math.sigmoid(flatten_sequence(predictions, hop))
-        Target = flatten_sequence(Classes_Val, hop)
+        print('Preparing validation data...')
+
+        hop_size_ms = hop_size/22050
+
+        Prediction = flatten_sequence(tf.math.sigmoid(predictions), factor_div)
+        Target = flatten_sequence(Classes_Val, factor_div)
 
         factor = np.arange(len(Target))*hop_size_ms
         Target = factor*Target
@@ -250,11 +251,12 @@ for a in range(len(dropouts)):
             #j = np.where(Predicted!=0)[0]
             #Pred = Prediction[j]
             Pred = np.argwhere(Prediction>=Threshold[i])[:,0]*hop_size_ms
-            ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
+            ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.012>abs(x-y)]
             Pred = np.delete(Pred, ind_delete)
-            f1_score[i], precision[i], recall[i] = f_measure(Target, Pred, window=0.03)
-
+            f1_score[i], precision[i], recall[i] = f_measure(Target, Pred, window=0.024)
+            
         print('Val Accuracy for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(np.max(f1_score)))
+        accuracies_val[g] = np.max(f1_score)
         thresholds_crossval[g] = Threshold[f1_score.argmax()]
         g += 1
 
@@ -268,11 +270,8 @@ for a in range(len(dropouts)):
 
     hop_size_ms = hop_size/22050
 
-    #Prediction = (flatten_sequence(predictions,hop)-pred_norm[idx_best_model][1])/(pred_norm[idx_best_model][0]-pred_norm[idx_best_model][1])
-    #Target = flatten_sequence(Classes_Test, hop)
-
-    Prediction = tf.math.sigmoid(flatten_sequence(predictions, hop))
-    Target = flatten_sequence(Classes_Test, hop)
+    Prediction = flatten_sequence(tf.math.sigmoid(predictions), factor_div)
+    Target = flatten_sequence(Classes_Test, factor_div)
 
     factor = np.arange(len(Target))*hop_size_ms
     Target = factor*Target
@@ -294,9 +293,9 @@ for a in range(len(dropouts)):
     #j = np.where(Predicted!=0)[0]
     #Pred = Prediction[j]
     Pred = np.argwhere(Prediction>=threshold)[:,0]*hop_size_ms
-    ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.015>abs(x-y)]
+    ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if 0.012>abs(x-y)]
     Pred = np.delete(Pred, ind_delete)
-    test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=0.03)
+    test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=0.024)
 
     print('Test Accuracy: {:.4f}'.format(test_accuracy))
 
@@ -310,38 +309,35 @@ for a in range(len(dropouts)):
         else:
             continue
         min_value = abs_diff[diff.argmin()]
-        if abs(min_value)<=0.015:
+        if abs(min_value)<=0.012:
             min_values.append(min_value)
         
     min_values = np.array(min_values)
     
-    frame_dev_absmeans[a] = np.mean(np.abs(min_values))
-    frame_dev_absstds[a] = np.std(np.abs(min_values))
-    frame_dev_means[a] = np.mean(min_values)
-    frame_dev_stds[a] = np.std(min_values)
+    frame_dev_absmean = np.mean(np.abs(min_values))
+    frame_dev_absstd = np.std(np.abs(min_values))
+    frame_dev_mean = np.mean(min_values)
+    frame_dev_std = np.std(min_values)
     
-    accuracies[a] = test_accuracy
-    precisions[a] = test_precision
-    recalls[a] = test_recall
-    all_thresholds_crossval[a] = thresholds_crossval
+    accuracy = test_accuracy
+    precision = test_precision
+    recall = test_recall
+
+    print('')
+    
+    print('Mean Absolute Onset Deviation: ' + str(frame_dev_absmean))
+    print('STD Absolute Onset Deviation: ' + str(frame_dev_absstd))
+    print('Mean Deviation: ' + str(frame_dev_mean))
+    print('STD Deviation: ' + str(frame_dev_std))
+    
+    print('Accuracy: ' + str(accuracy))
+    print('Precision: ' + str(precision))
+    print('Recall: ' + str(recall))
+    print('Cross-Validated Thresholds: ' + str(thresholds_crossval))
 
     print('')
 
-    print('Dropout: ' + str(dropout))
-    
-    print('Mean Absolute Onset Deviation: ' + str(frame_dev_absmeans[a]))
-    print('STD Absolute Onset Deviation: ' + str(frame_dev_absstds[a]))
-    print('Mean Deviation: ' + str(frame_dev_means[a]))
-    print('STD Deviation: ' + str(frame_dev_stds[a]))
-    
-    print('Accuracy: ' + str(accuracies[a]))
-    print('Precision: ' + str(precisions[a]))
-    print('Recall: ' + str(recalls[a]))
-    print('Cross-Validated Thresholds: ' + str(all_thresholds_crossval[a]))
-
-    print('')
-
-    np.save('../../results/' + mode + '/frame_dev_absstds', frame_dev_absstds)
+    '''np.save('../../results/' + mode + '/frame_dev_absstds', frame_dev_absstds)
     np.save('../../results/' + mode + '/frame_dev_absmeans', frame_dev_absmeans)
     np.save('../../results/' + mode + '/frame_dev_means', frame_dev_means)
     np.save('../../results/' + mode + '/frame_dev_stds', frame_dev_stds)
@@ -351,6 +347,17 @@ for a in range(len(dropouts)):
     np.save('../../results/' + mode + '/recalls', recalls)
     np.save('../../results/' + mode + '/thresholds', all_thresholds_crossval)
 
-    if accuracies[a]==np.max(accuracies):
+    if accuracies==np.max(accuracies):
         for g in range(num_crossval):
-            models[idx_best_model].save_weights('../../models/' + mode + '/model_dropout_' + str(dropout) + '_crossval_' + str(idx_best_model) + '.h5')
+            models[idx_best_model].save_weights('../../models/' + mode + '/model_dropout_' + str(dropout) + '_crossval_' + str(idx_best_model) + '.h5')'''
+
+    tf.keras.backend.clear_session()
+
+    return np.mean(accuracies_val)
+
+
+study = optuna.create_study(direction="maximize")
+study.enqueue_trial({"onset_minus_2":0.0, "onset_minus_1":0.2, "onset_plus_1":0.5, "onset_plus_2":0.1,})
+study.optimize(objective, n_trials=30)
+
+study.best_params

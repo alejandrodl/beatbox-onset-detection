@@ -105,10 +105,10 @@ for a in range(len(dropouts)):
 
     set_seeds(0)
 
-    Tensor_TrainVal = np.load('../../data/interim/Dataset_TrainVal.npy').T
-    Classes_TrainVal = np.load('../../data/interim/Classes_TrainVal.npy')
-    Tensor_Test = np.load('../../data/interim/Dataset_Test.npy').T
-    Classes_Test = np.load('../../data/interim/Classes_Test.npy')
+    Tensor_TrainVal_Raw = np.load('../../data/interim/Dataset_TrainVal.npy').T
+    Classes_TrainVal_Raw = np.load('../../data/interim/Classes_TrainVal.npy')
+    Tensor_Test_Raw = np.load('../../data/interim/Dataset_Test.npy').T
+    Classes_Test_Raw = np.load('../../data/interim/Classes_Test.npy')
     
     for i in range(len(Classes_TrainVal)):
         if Classes_TrainVal[i]==1:
@@ -118,29 +118,26 @@ for a in range(len(dropouts)):
 
     set_seeds(0)
 
-    cut_length = int(Classes_TrainVal.shape[0]/sequence_length)*sequence_length
+    #Tensor_TrainVal = np.lib.stride_tricks.sliding_window_view(Tensor_TrainVal,(sequence_length,Tensor_TrainVal.shape[1]))[:,0,:,:]
+    #Tensor_Test = np.lib.stride_tricks.sliding_window_view(Tensor_Test,(sequence_length,Tensor_Test.shape[1]))[:,0,:,:]
 
-    Classes_TrainVal_0 = Classes_TrainVal[:cut_length]
-    Tensor_TrainVal_0 = Tensor_TrainVal[:cut_length]
-    Classes_Test_0 = Classes_Test[:cut_length]
-    Tensor_Test_0 = Tensor_Test[:cut_length]
+    length = Tensor_TrainVal_Raw.shape[0]-sequence_length+1
+    Tensor_TrainVal = np.zeros(shape=(length,sequence_length,Tensor_TrainVal_Raw.shape[1]))
+    Classes_TrainVal = np.zeros(shape=(length,sequence_length))
+    for n in range(sequence_length):
+        Tensor_TrainVal[:,n] = Tensor_TrainVal_Raw[n:length+n]
+        Classes_TrainVal[:,n] = Classes_TrainVal_Raw[n:length+n]
+    Tensor_TrainVal = Tensor_TrainVal[::factor_div]
+    Classes_TrainVal = Classes_TrainVal[::factor_div]
 
-    div_sequence_length = sequence_length//factor_div
-
-    Tensor_TrainVal = np.zeros((int(Tensor_TrainVal_0.shape[0]/div_sequence_length)-(factor_div-1), sequence_length, Tensor_TrainVal_0.shape[1]))
-    Classes_TrainVal = np.zeros((int(len(Classes_TrainVal_0)/div_sequence_length)-(factor_div-1), sequence_length))
-    Tensor_Test = np.zeros((int(Tensor_Test_0.shape[0]/div_sequence_length)-(factor_div-1), sequence_length, Tensor_Test_0.shape[1]))
-    Classes_Test = np.zeros((int(len(Classes_Test_0)/div_sequence_length)-(factor_div-1), sequence_length))
-
-    for n in range(int(Tensor_TrainVal_0.shape[0]/div_sequence_length)-(factor_div-1)):
-        point = n*div_sequence_length
-        Tensor_TrainVal[n] = Tensor_TrainVal_0[point:point+sequence_length]
-        Classes_TrainVal[n] = Classes_TrainVal_0[point:point+sequence_length]
-
-    for n in range(int(Tensor_Test_0.shape[0]/div_sequence_length)-(factor_div-1)):
-        point = n*div_sequence_length
-        Tensor_Test[n] = Tensor_Test_0[point:point+sequence_length]
-        Classes_Test[n] = Classes_Test_0[point:point+sequence_length]
+    length = Tensor_Test_Raw.shape[0]-sequence_length+1
+    Tensor_Test = np.zeros(shape=(length,sequence_length,Tensor_Test_Raw.shape[1]))
+    Classes_Test = np.zeros(shape=(length,sequence_length))
+    for n in range(sequence_length):
+        Tensor_Test[:,n] = Tensor_Test_Raw[n:length+n]
+        Classes_Test[:,n] = Classes_Test_Raw[n:length+n]
+    Tensor_Test = Tensor_Test[::factor_div]
+    Classes_Test = Classes_Test[::factor_div]
 
     Tensor_TrainVal = np.log(Tensor_TrainVal+1e-4)
     min_norm = np.min(Tensor_TrainVal)
