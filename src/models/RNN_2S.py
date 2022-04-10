@@ -5,6 +5,7 @@ import numpy as np
 import scipy as sp
 import matplotlib.pyplot as plt
 
+import madmom
 import tensorflow as tf
 
 from sklearn.metrics import f1_score
@@ -62,7 +63,7 @@ def flatten_sequence(sequence, factor):
 
     
 
-modes = ['RNN_2b','RNN_3b']
+modes = ['RNN_3S']
 
 num_crossval = 7
 
@@ -74,12 +75,16 @@ sequence_length = 10
 
 num_thresholds_F1_score = 100.
 
-lr = 1e-3
-batch_size = 256
+lr = 1e-2
+batch_size = 128
 hop_size = 128
 
-dropout = 0.1
-eval_window_lengths = [0.0058,0.0116,0.0174,0.0232,0.029,0.0348]
+dropout = 0
+eval_window_lengths = np.array([0.0087,0.0145,0.0203,0.0261,0.0319])
+#eval_window_lengths = np.array([0.0058,0.0174,0.029,0.0406])+0.001
+#eval_window_lengths = np.array([0.0087,0.0145,0.0203,0.0261,0.0319,0.0377])
+
+pre_max = np.array([0,2,8])*0.0058
 
 frame_dev_absmeans = np.zeros((5,len(eval_window_lengths)))
 frame_dev_absstds = np.zeros((5,len(eval_window_lengths)))
@@ -102,8 +107,6 @@ for mode in modes:
 
     for a in range(5):
 
-        dropout = 0.1
-
         set_seeds(0)
 
         Tensor_TrainVal_Raw = np.load('../../data/interim/Dataset_TrainVal.npy').T
@@ -117,7 +120,7 @@ for mode in modes:
                 Classes_TrainVal[i+1] = 0.5
                 Classes_TrainVal[i+2] = 0.1'''
 
-        if mode=='RNN_2':
+        if mode=='RNN_3S':
             for i in range(len(Classes_TrainVal)):
                 if Classes_TrainVal[i]==1:
                     Classes_TrainVal[i+1] = 0.999
@@ -166,6 +169,11 @@ for mode in modes:
 
         skf = KFold(n_splits=num_crossval)
 
+        pre_max_crossval = np.zeros((len(eval_window_lengths),num_crossval))
+
+        min_norm_crossval = np.zeros(num_crossval)
+        max_norm_crossval = np.zeros(num_crossval)
+
         thresholds_crossval = np.zeros((len(eval_window_lengths),num_crossval))
         accuracies_val = np.zeros((len(eval_window_lengths),num_crossval))
 
@@ -198,13 +206,13 @@ for mode in modes:
                 set_seeds(a)
                 model = RNN_2(sequence_length, dropout)
                 set_seeds(a)
-                model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
+                model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
                 set_seeds(a)
                 history = model.fit(Dataset_Train, Classes_Train, batch_size=batch_size, epochs=epochs, validation_data=(Dataset_Val, Classes_Val), callbacks=[early_stopping,lr_scheduler], shuffle=True)
 
-            '''if min(history.history['val_loss'])<min_val_loss:
+            if min(history.history['val_loss'])<min_val_loss:
                 idx_best_model = g
-                min_val_loss = min(history.history['val_loss'])'''
+                min_val_loss = min(history.history['val_loss'])
 
             print('Val Loss for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(min(history.history['val_loss'])))
 
@@ -220,16 +228,25 @@ for mode in modes:
 
             #pred_norm.append([np.max(pred_all),np.min(pred_all)])
 
-            Classes_Val[Classes_Val!=1] = 0
-            hop_size_ms = hop_size/22050
+            #Classes_Val[Classes_Val!=1] = 0
+            #hop_size_ms = hop_size/22050
 
             #Prediction = (pred_val-pred_norm[g][1])/(pred_norm[g][0]-pred_norm[g][1])
             #Target = Classes_Val
 
-            predictions = model.predict(Dataset_Val.astype('float32'))
+            Prediction = model.predict(Tensor_TrainVal.astype('float32'))
+            Prediction = Prediction.flatten()
+
+            Classes_TrainVal_CV = Classes_TrainVal.copy()
+            Classes_TrainVal_CV[Classes_TrainVal_CV!=1] = 0
+            hop_size_ms = hop_size/22050
+
+            min_norm_crossval[g] = np.min(Prediction)
+            max_norm_crossval[g] = np.max(Prediction)
+            Prediction = (Prediction-min_norm_crossval[g])/(max_norm_crossval[g]-min_norm_crossval[g])
             
-            Prediction = tf.math.sigmoid(predictions)
-            Target = Classes_Val
+            #Prediction = tf.math.sigmoid(predictions)
+            Target = Classes_TrainVal_CV
 
             factor = np.arange(len(Target))*hop_size_ms
             Target = factor*Target
@@ -250,33 +267,39 @@ for mode in modes:
 
             print('Calculating threshold...')
 
-            max_val_accuracies = np.zeros(len(eval_window_lengths))
-            f1_score = np.zeros((len(eval_window_lengths),len(Threshold)))
-            precision = np.zeros((len(eval_window_lengths),len(Threshold)))
-            recall = np.zeros((len(eval_window_lengths),len(Threshold)))
+            f1_score = np.zeros((len(eval_window_lengths),len(pre_max),len(Threshold)))
+            precision = np.zeros((len(eval_window_lengths),len(pre_max),len(Threshold)))
+            recall = np.zeros((len(eval_window_lengths),len(pre_max),len(Threshold)))
             for n in range(len(eval_window_lengths)):
-                print('Calculating threshold for evaluation window length = ' + str(eval_window_lengths[n]))
-                for i in range(len(Threshold)):
-                    #Predicted = [1 if item>Threshold[i] else 0 for item in Prediction]
-                    #Predicted = np.array(Predicted)*factor
-                    #j = np.where(Predicted!=0)[0]
-                    #Pred = Prediction[j]
-                    Pred = np.argwhere(Prediction>=Threshold[i])[:,0]*hop_size_ms
-                    ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if eval_window_lengths[n]/2>abs(x-y)]
-                    Pred = np.delete(Pred, ind_delete)
-                    for s in range(len(Pred)-1):
-                        if Pred[s+1]<Pred[s]:
-                            print('Ensuring Monotonic Predictions')
-                            Pred[s+1] = Pred[s]
-                    f1_score[n,i], precision[n,i], recall[n,i] = f_measure(Target, Pred, window=eval_window_lengths[n])
-                accuracies_val[n,g] = np.max(f1_score[n])
-                thresholds_crossval[n,g] = Threshold[f1_score[n].argmax()]
-                max_val_accuracies[n] = np.max(f1_score[n])
+                for e in range(len(pre_max)):
+                    print('Calculating threshold for evaluation window length = ' + str(eval_window_lengths[n]) + ', pre_max = ' + str(pre_max[e]))
+                    for i in range(len(Threshold)):
+                        pick_picker = madmom.features.onsets.OnsetPeakPickingProcessor(fps=172.265625,pre_avg=0,post_avg=0,pre_max=pre_max[e],post_max=0,threshold=Threshold[i])
+                        Pred = pick_picker(Prediction)
+                        '''for s in range(len(Pred)-1):
+                            if Pred[s+1]<Pred[s]:
+                                print('Ensuring Monotonic Predictions')
+                                Pred[s+1] = Pred[s]'''
+                        f1_score[n,e,i], precision[n,e,i], recall[n,e,i] = f_measure(Target, Pred, window=eval_window_lengths[n])
 
-            print('Val Accuracies for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(accuracies_val[:,g]))
+            max_f1 = np.zeros(len(eval_window_lengths))
+            idx_max = np.zeros((len(eval_window_lengths),2))
+            for n in range(len(eval_window_lengths)):
+                for i in range(len(Threshold)):
+                    for e in range(len(pre_max)):
+                        if f1_score[n,e,i]>max_f1[n]:
+                            max_f1[n] = f1_score[n,e,i]
+                            idx_max[n] = np.array([e,i])
+                thresholds_crossval[n,g] = Threshold[int(idx_max[n,1])]
+                pre_max_crossval[n,g] = pre_max[int(idx_max[n,0])]
+            print(idx_max)
+
+            print('Val Accuracy for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(np.max(np.max(f1_score,axis=1),axis=1)))
             g += 1
 
             tf.keras.backend.clear_session()
+
+            break
 
         # Test
 
@@ -284,17 +307,27 @@ for mode in modes:
 
         for n in range(len(eval_window_lengths)):
 
-            idx_model = (np.abs((thresholds_crossval[n]-thresholds_crossval[n].mean()))).argmin()
+            #idx_model = (np.abs((thresholds_crossval[n]-thresholds_crossval[n].mean()))).argmin()
+            idx_model = 0
             model = models[idx_model]
 
-            predictions = model.predict(Dataset_Test.astype('float32'))
+            #pre_max_eval = np.mean(pre_max_crossval[n])
+            #threshold = np.mean(thresholds_crossval[n])
+
+            pre_max_eval = pre_max_crossval[n,idx_model]
+            threshold = thresholds_crossval[n,idx_model]
+
+            Prediction = model.predict(Dataset_Test.astype('float32'))
+            Prediction = Prediction.flatten()
+
+            Prediction = (Prediction-min_norm_crossval[idx_model])/(max_norm_crossval[idx_model]-min_norm_crossval[idx_model])
 
             hop_size_ms = hop_size/22050
 
             #Prediction = (predictions-pred_norm[idx_best_model][1])/(pred_norm[idx_best_model][0]-pred_norm[idx_best_model][1])
             #Target = Classes_Test
 
-            Prediction = tf.math.sigmoid(predictions)
+            #Prediction = tf.math.sigmoid(predictions)
             Target = Classes_Test
 
             factor = np.arange(len(Target))*hop_size_ms
@@ -312,14 +345,13 @@ for mode in modes:
 
             min_values = [[],[],[],[],[],[]]
             min_indices = [[],[],[],[],[],[]]
-            #for n in range(len(eval_window_lengths)):
-            Pred = np.argwhere(Prediction>=np.mean(thresholds_crossval[n]))[:,0]*hop_size_ms
-            ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if eval_window_lengths[n]/2>abs(x-y)]
-            Pred = np.delete(Pred, ind_delete)
-            for s in range(len(Pred)-1):
+
+            pick_picker = madmom.features.onsets.OnsetPeakPickingProcessor(fps=172.265625,pre_avg=0,post_avg=0,pre_max=pre_max_eval,post_max=0,threshold=threshold)
+            Pred = pick_picker(Prediction)
+            '''for s in range(len(Pred)-1):
                 if Pred[s+1]<Pred[s]:
                     print('Ensuring Monotonic Predictions')
-                    Pred[s+1] = Pred[s]
+                    Pred[s+1] = Pred[s]'''
             test_accuracy, test_precision, test_recall = f_measure(Target, Pred, window=eval_window_lengths[n])
             for k in range(len(Pred)):
                 abs_diff = Target-Pred[k]

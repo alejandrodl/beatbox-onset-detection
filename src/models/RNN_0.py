@@ -18,7 +18,7 @@ from utils import set_seeds
 
 
 
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 os.nice(0)
 gpu_name = '/GPU:0'
 
@@ -62,7 +62,7 @@ def flatten_sequence(sequence, factor):
 
     
 
-modes = ['RNN_2b','RNN_3b']
+modes = ['RNN_-2','RNN_-1']
 
 num_crossval = 7
 
@@ -117,17 +117,15 @@ for mode in modes:
                 Classes_TrainVal[i+1] = 0.5
                 Classes_TrainVal[i+2] = 0.1'''
 
-        if mode=='RNN_2':
+        if mode=='RNN_-2':
             for i in range(len(Classes_TrainVal)):
                 if Classes_TrainVal[i]==1:
-                    Classes_TrainVal[i+1] = 0.999
-                    Classes_TrainVal[i+2] = 0.999
+                    Classes_TrainVal[i-1] = 0.999
+                    Classes_TrainVal[i-2] = 0.999
         else:
             for i in range(len(Classes_TrainVal)):
                 if Classes_TrainVal[i]==1:
-                    Classes_TrainVal[i+1] = 0.999
-                    Classes_TrainVal[i+2] = 0.999
-                    Classes_TrainVal[i+3] = 0.999
+                    Classes_TrainVal[i-1] = 0.999
 
         set_seeds(0)
 
@@ -196,15 +194,11 @@ for mode in modes:
 
             with tf.device(gpu_name):
                 set_seeds(a)
-                model = RNN_2(sequence_length, dropout)
+                model = RNN_1(sequence_length, dropout)
                 set_seeds(a)
                 model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr), loss=tf.keras.losses.BinaryCrossentropy(from_logits=True)) # , metrics=['accuracy']
                 set_seeds(a)
                 history = model.fit(Dataset_Train, Classes_Train, batch_size=batch_size, epochs=epochs, validation_data=(Dataset_Val, Classes_Val), callbacks=[early_stopping,lr_scheduler], shuffle=True)
-
-            '''if min(history.history['val_loss'])<min_val_loss:
-                idx_best_model = g
-                min_val_loss = min(history.history['val_loss'])'''
 
             print('Val Loss for fold ' + str(g+1) + ' of ' + str(num_crossval) + ': ' + str(min(history.history['val_loss'])))
 
@@ -312,7 +306,11 @@ for mode in modes:
 
             min_values = [[],[],[],[],[],[]]
             min_indices = [[],[],[],[],[],[]]
-            #for n in range(len(eval_window_lengths)):
+
+            #Predicted = [1 if item>Threshold[i] else 0 for item in Prediction]
+            #Predicted = np.array(Predicted)*factor
+            #j = np.where(Predicted!=0)[0]
+            #Pred = Prediction[j]
             Pred = np.argwhere(Prediction>=np.mean(thresholds_crossval[n]))[:,0]*hop_size_ms
             ind_delete = [i+1 for (x,y,i) in zip(Pred,Pred[1:],range(len(Pred))) if eval_window_lengths[n]/2>abs(x-y)]
             Pred = np.delete(Pred, ind_delete)

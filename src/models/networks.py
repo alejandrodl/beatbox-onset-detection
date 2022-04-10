@@ -111,9 +111,7 @@ class RNN_2(tf.keras.Model):
         self.rnn = tf.keras.Sequential(
             [
                 tf.keras.layers.InputLayer(input_shape=(sequence_length, 128)),
-                tf.keras.layers.LSTM(64, return_sequences=True),
-
-                tf.keras.layers.LSTM(32),
+                tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(32)),
                 tf.keras.layers.Dropout(dropout),
                 tf.keras.layers.Dense(1),
             ]
@@ -141,6 +139,97 @@ class RNN_3(tf.keras.Model):
 
     def call(self, x):
         out = self.rnn(x)
+        return out
+
+
+
+class CRNN_1S(tf.keras.Model):
+
+    def __init__(self, sequence_length, dropout):
+        super(CRNN_1S, self).__init__()
+        self.sequence_length = sequence_length
+        self.cnn = tf.keras.Sequential(
+            [
+                tf.keras.layers.InputLayer(input_shape=(128, 1)),
+                tf.keras.layers.ZeroPadding1D(padding=9),
+                tf.keras.layers.Conv1D(filters=16,
+                                       kernel_size=18, strides=6, padding='valid',
+                                       activation=None),
+                #tf.keras.layers.BatchNormalization(),
+                tf.keras.layers.ReLU(),
+                tf.keras.layers.ZeroPadding1D(padding=9),
+                tf.keras.layers.Conv1D(filters=32,
+                                       kernel_size=18, strides=6, padding='valid',
+                                       activation=None),
+                #tf.keras.layers.BatchNormalization(),
+                tf.keras.layers.ReLU(),
+                tf.keras.layers.Flatten(),
+            ]
+        )
+        self.rnn = tf.keras.Sequential(
+            [
+                tf.keras.layers.InputLayer(input_shape=(sequence_length, 128)),
+                tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(32)),
+                tf.keras.layers.Dropout(dropout),
+                tf.keras.layers.Dense(1),
+            ]
+        )
+
+    def call(self, x):
+        for n in range(self.sequence_length):
+            x_input = x[:,n]
+            if n==0:
+                embeddings = self.cnn(x_input)
+                embeddings = tf.expand_dims(embeddings,axis=1)
+            else:
+                cnn_out = self.cnn(x_input)
+                embeddings = tf.concat((embeddings,tf.expand_dims(cnn_out,axis=1)),axis=1)
+        out = self.rnn(embeddings)
+        return out
+
+
+
+
+class CRNN_1S_2D(tf.keras.Model):
+
+    def __init__(self, sequence_length, dropout):
+        super(CRNN_1S_2D, self).__init__()
+        self.sequence_length = sequence_length
+        self.cnn = tf.keras.Sequential(
+            [
+                tf.keras.layers.InputLayer(input_shape=(8, 128, 1)),
+                tf.keras.layers.Conv2D(filters=16, kernel_size=(7,3), strides=(1,1), activation=None, padding='same'),
+                tf.keras.layers.BatchNormalization(),
+                tf.keras.layers.ReLU(),
+                tf.keras.layers.MaxPool2D(pool_size=(2, 4), padding='valid'),
+                tf.keras.layers.Conv2D(filters=32, kernel_size=(3,3), strides=(1,1), activation=None, padding='same'),
+                tf.keras.layers.BatchNormalization(),
+                tf.keras.layers.ReLU(),
+                tf.keras.layers.MaxPool2D(pool_size=(2, 8), padding='valid'),
+                tf.keras.layers.Flatten(),
+            ]
+        )
+        self.rnn = tf.keras.Sequential(
+            [
+                tf.keras.layers.InputLayer(input_shape=(sequence_length, 256)),
+                tf.keras.layers.Bidirectional(tf.keras.layers.GRU(64, return_sequences=True)),
+                tf.keras.layers.Bidirectional(tf.keras.layers.GRU(64, return_sequences=True)),
+                tf.keras.layers.Bidirectional(tf.keras.layers.GRU(64)),
+                tf.keras.layers.Dropout(dropout),
+                tf.keras.layers.Dense(sequence_length),
+            ]
+        )
+
+    def call(self, x):
+        for n in range(self.sequence_length):
+            x_input = x[:,n]
+            if n==0:
+                embeddings = self.cnn(x_input)
+                embeddings = tf.expand_dims(embeddings,axis=1)
+            else:
+                cnn_out = self.cnn(x_input)
+                embeddings = tf.concat((embeddings,tf.expand_dims(cnn_out,axis=1)),axis=1)
+        out = self.rnn(embeddings)
         return out
 
 

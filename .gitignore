@@ -115,4 +115,4 @@ dmypy.json
 
 # folders
 data
-results/aubio_results
+results

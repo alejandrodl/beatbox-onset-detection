@@ -61,7 +61,7 @@ def flatten_sequence(sequence, factor):
 
 
 
-epochs = 2
+epochs = 15
 patience_lr = 10
 patience_early = 20
 
@@ -76,9 +76,10 @@ if not os.path.isdir('models/' + mode):
 if not os.path.isdir('results/' + mode):
     os.mkdir('results/' + mode)
 
-networks = ['1','2','3']
-sequence_lengths = [32,16]
-eval_window_lengths = [0.005,0.01,0.015,0.02,0.025,0.03]
+#networks = ['1','2','3']
+networks = ['2']
+sequence_lengths = [16]
+eval_window_lengths = [0.0087,0.0145,0.0203,0.0261,0.0319]
 
 dropout = 0
 
@@ -118,9 +119,8 @@ for a in range(len(sequence_lengths)):
         
         for i in range(len(Classes_TrainVal)):
             if Classes_TrainVal[i]==1:
-                Classes_TrainVal[i-1] = 0.2
-                Classes_TrainVal[i+1] = 0.5
-                Classes_TrainVal[i+2] = 0.1
+                Classes_TrainVal[i+1] = 0.999
+                Classes_TrainVal[i+2] = 0.999
 
         set_seeds(0)
 
