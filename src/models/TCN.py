@@ -84,7 +84,6 @@ batch_size = 1024
 hop_size = 128
 
 dropouts = [0,0.1,0.2,0.3,0.4,0.5,0.6,0.7]
-#dropouts = [0.3]
 
 if not os.path.isdir('../../models/' + mode):
     os.mkdir('../../models/' + mode)
